@@ -6,13 +6,13 @@ const CPU_TYPE_X86_64: u32 = 0x0100_0007;
 const LC_SEGMENT_64: u32 = 0x19;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Arch {
+pub enum Arch {
     Arm64,
     X86_64,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Section {
+pub struct Section {
     pub seg: String,
     pub name: String,
     pub addr: u64,
@@ -21,34 +21,34 @@ pub(crate) struct Section {
 }
 
 #[derive(Debug)]
-pub(crate) struct Slice<'a> {
+pub struct Slice<'a> {
     pub data: &'a [u8],
     pub sections: Vec<Section>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Xref {
+pub struct Xref {
     pub at: u64,
 }
 
-pub(crate) fn read_u32_le(buf: &[u8], off: usize) -> Option<u32> {
+pub fn read_u32_le(buf: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_le_bytes(buf.get(off..off + 4)?.try_into().ok()?))
 }
 
-pub(crate) fn read_u32_be(buf: &[u8], off: usize) -> Option<u32> {
+pub fn read_u32_be(buf: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_be_bytes(buf.get(off..off + 4)?.try_into().ok()?))
 }
 
-pub(crate) fn read_u64_le(buf: &[u8], off: usize) -> Option<u64> {
+pub fn read_u64_le(buf: &[u8], off: usize) -> Option<u64> {
     Some(u64::from_le_bytes(buf.get(off..off + 8)?.try_into().ok()?))
 }
 
-pub(crate) fn cstr(bytes: &[u8]) -> String {
+pub fn cstr(bytes: &[u8]) -> String {
     let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..end]).to_string()
 }
 
-pub(crate) fn parse_slice(data: &[u8], arch: Arch) -> Result<Slice<'_>, String> {
+pub fn parse_slice(data: &[u8], arch: Arch) -> Result<Slice<'_>, String> {
     let target_cputype = match arch {
         Arch::Arm64 => CPU_TYPE_ARM64,
         Arch::X86_64 => CPU_TYPE_X86_64,
@@ -99,7 +99,7 @@ pub(crate) fn parse_slice(data: &[u8], arch: Arch) -> Result<Slice<'_>, String> 
     parse_macho64(data, 0, target_cputype)
 }
 
-pub(crate) fn parse_macho64(data: &[u8], file_offset: u64, expected_cputype: u32) -> Result<Slice<'_>, String> {
+pub fn parse_macho64(data: &[u8], file_offset: u64, expected_cputype: u32) -> Result<Slice<'_>, String> {
     let magic = read_u32_le(data, 0).ok_or("file too small for Mach-O header")?;
     if magic != MH_MAGIC_64 {
         return Err(format!("unsupported Mach-O magic: 0x{magic:08x} (expected 0x{MH_MAGIC_64:08x})"));
@@ -170,20 +170,20 @@ pub(crate) fn parse_macho64(data: &[u8], file_offset: u64, expected_cputype: u32
     Ok(Slice { data, sections })
 }
 
-pub(crate) fn section<'a>(slice: &'a Slice<'a>, seg: &str, name: &str) -> Option<&'a Section> {
+pub fn section<'a>(slice: &'a Slice<'a>, seg: &str, name: &str) -> Option<&'a Section> {
     slice
         .sections
         .iter()
         .find(|s| s.seg == seg && s.name == name)
 }
 
-pub(crate) fn section_bytes<'a>(slice: &'a Slice<'a>, sec: &Section) -> Option<&'a [u8]> {
+pub fn section_bytes<'a>(slice: &'a Slice<'a>, sec: &Section) -> Option<&'a [u8]> {
     let start = sec.offset as usize;
     let end = start.checked_add(sec.size as usize)?;
     slice.data.get(start..end)
 }
 
-pub(crate) fn vm_to_file_off(slice: &Slice<'_>, vm: u64) -> Option<u64> {
+pub fn vm_to_file_off(slice: &Slice<'_>, vm: u64) -> Option<u64> {
     for sec in &slice.sections {
         if vm >= sec.addr && vm < sec.addr + sec.size {
             return Some(sec.offset + (vm - sec.addr));
@@ -192,7 +192,7 @@ pub(crate) fn vm_to_file_off(slice: &Slice<'_>, vm: u64) -> Option<u64> {
     None
 }
 
-pub(crate) fn find_string(slice: &Slice<'_>, needle: &str) -> Vec<u64> {
+pub fn find_string(slice: &Slice<'_>, needle: &str) -> Vec<u64> {
     let mut out = Vec::new();
     let bytes = needle.as_bytes();
     for sec in slice.sections.iter().filter(|s| s.seg == "__TEXT") {

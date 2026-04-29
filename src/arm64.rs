@@ -1,11 +1,11 @@
 use crate::macho::{self, Slice, Xref};
 
-pub(crate) fn sign_extend(value: i64, bits: u32) -> i64 {
+pub fn sign_extend(value: i64, bits: u32) -> i64 {
     let shift = 64 - bits;
     (value << shift) >> shift
 }
 
-pub(crate) fn decode_adrp(insn: u32, pc: u64) -> Option<(u8, u64)> {
+pub fn decode_adrp(insn: u32, pc: u64) -> Option<(u8, u64)> {
     if (insn & 0x9F00_0000) != 0x9000_0000 {
         return None;
     }
@@ -17,7 +17,7 @@ pub(crate) fn decode_adrp(insn: u32, pc: u64) -> Option<(u8, u64)> {
     Some((rd, (page + imm) as u64))
 }
 
-pub(crate) fn decode_add_imm(insn: u32) -> Option<(u8, u8, u64)> {
+pub fn decode_add_imm(insn: u32) -> Option<(u8, u8, u64)> {
     if (insn & 0x7F00_0000) != 0x1100_0000 {
         return None;
     }
@@ -31,7 +31,7 @@ pub(crate) fn decode_add_imm(insn: u32) -> Option<(u8, u8, u64)> {
     Some((rd, rn, imm12 << (shift * 12)))
 }
 
-pub(crate) fn decode_ldr_literal(insn: u32, pc: u64) -> Option<(u8, u64)> {
+pub fn decode_ldr_literal(insn: u32, pc: u64) -> Option<(u8, u64)> {
     if (insn & 0x3B00_0000) != 0x1800_0000 {
         return None;
     }
@@ -41,7 +41,7 @@ pub(crate) fn decode_ldr_literal(insn: u32, pc: u64) -> Option<(u8, u64)> {
     Some((rt, (pc as i64 + imm) as u64))
 }
 
-pub(crate) fn decode_bl(insn: u32, pc: u64) -> Option<u64> {
+pub fn decode_bl(insn: u32, pc: u64) -> Option<u64> {
     if (insn & 0xFC00_0000) != 0x9400_0000 {
         return None;
     }
@@ -50,7 +50,7 @@ pub(crate) fn decode_bl(insn: u32, pc: u64) -> Option<u64> {
     Some((pc as i64 + imm) as u64)
 }
 
-pub(crate) fn decode_mov_sp(insn: u32) -> Option<(u8, u8)> {
+pub fn decode_mov_sp(insn: u32) -> Option<(u8, u8)> {
     if (insn & 0x7F00_0000) == 0x1100_0000 {
         let rd = (insn & 0x1f) as u8;
         let rn = ((insn >> 5) & 0x1f) as u8;
@@ -63,7 +63,7 @@ pub(crate) fn decode_mov_sp(insn: u32) -> Option<(u8, u8)> {
     None
 }
 
-pub(crate) fn decode_str_w_imm(insn: u32) -> Option<(u8, u8, u32)> {
+pub fn decode_str_w_imm(insn: u32) -> Option<(u8, u8, u32)> {
     if (insn & 0xFFC0_0000) != 0xB900_0000 {
         return None;
     }
@@ -73,7 +73,7 @@ pub(crate) fn decode_str_w_imm(insn: u32) -> Option<(u8, u8, u32)> {
     Some((rt, rn, imm))
 }
 
-pub(crate) fn decode_mov_w_imm(insn: u32) -> Option<(u8, u32)> {
+pub fn decode_mov_w_imm(insn: u32) -> Option<(u8, u32)> {
     if (insn & 0x7F80_0000) != 0x5280_0000 {
         return None;
     }
@@ -82,7 +82,7 @@ pub(crate) fn decode_mov_w_imm(insn: u32) -> Option<(u8, u32)> {
     Some((rd, imm16))
 }
 
-pub(crate) fn scan_text_words(slice: &Slice<'_>) -> Result<Vec<(u64, u32)>, String> {
+pub fn scan_text_words(slice: &Slice<'_>) -> Result<Vec<(u64, u32)>, String> {
     let text = macho::section(slice, "__TEXT", "__text")
         .ok_or("__TEXT,__text not found in binary")?;
     let buf = macho::section_bytes(slice, text)
@@ -95,7 +95,7 @@ pub(crate) fn scan_text_words(slice: &Slice<'_>) -> Result<Vec<(u64, u32)>, Stri
     Ok(out)
 }
 
-pub(crate) fn find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<Xref>, String> {
+pub fn find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<Xref>, String> {
     let words = scan_text_words(slice)?;
     let mut xrefs = Vec::new();
     for i in 0..words.len() {
@@ -120,7 +120,7 @@ pub(crate) fn find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<Xref
     Ok(xrefs)
 }
 
-pub(crate) fn function_bounds(slice: &Slice<'_>, near: u64) -> Result<(u64, u64), String> {
+pub fn function_bounds(slice: &Slice<'_>, near: u64) -> Result<(u64, u64), String> {
     let text = macho::section(slice, "__TEXT", "__text")
         .ok_or("__TEXT,__text not found for function bounds")?;
     let start_min = text.addr;
@@ -166,16 +166,16 @@ pub(crate) fn function_bounds(slice: &Slice<'_>, near: u64) -> Result<(u64, u64)
     Ok((start, end))
 }
 
-pub(crate) fn is_probable_prologue(insn: u32) -> bool {
+pub fn is_probable_prologue(insn: u32) -> bool {
     is_stp_preindex_sp(insn) || is_sub_sp_imm(insn)
 }
 
-pub(crate) fn is_stp_preindex_sp(insn: u32) -> bool {
+pub fn is_stp_preindex_sp(insn: u32) -> bool {
     // stp x?, x?, [sp,#-imm]!
     (insn & 0xFFC0_0000) == 0xA980_0000 && ((insn >> 5) & 0x1f) == 31
 }
 
-pub(crate) fn is_sub_sp_imm(insn: u32) -> bool {
+pub fn is_sub_sp_imm(insn: u32) -> bool {
     (insn & 0x7F00_0000) == 0x5100_0000 && ((insn >> 5) & 0x1f) == 31 && (insn & 0x1f) == 31
 }
 
@@ -201,7 +201,7 @@ fn normalize_prologue(slice: &Slice<'_>, addr: u64, insn: u32) -> u64 {
     addr
 }
 
-pub(crate) fn instructions_in(slice: &Slice<'_>, start: u64, end: u64) -> Vec<(u64, u32)> {
+pub fn instructions_in(slice: &Slice<'_>, start: u64, end: u64) -> Vec<(u64, u32)> {
     let mut out = Vec::new();
     let mut addr = start & !3;
     while addr + 4 <= end {
@@ -215,13 +215,13 @@ pub(crate) fn instructions_in(slice: &Slice<'_>, start: u64, end: u64) -> Vec<(u
     out
 }
 
-pub(crate) fn first_bl_in(slice: &Slice<'_>, start: u64, end: u64) -> Option<(u64, u64)> {
+pub fn first_bl_in(slice: &Slice<'_>, start: u64, end: u64) -> Option<(u64, u64)> {
     instructions_in(slice, start, end)
         .into_iter()
         .find_map(|(pc, insn)| decode_bl(insn, pc).map(|target| (pc, target)))
 }
 
-pub(crate) fn function_start_from_xref(
+pub fn function_start_from_xref(
     slice: &Slice<'_>,
     string: &str,
 ) -> Result<(u64, u64, u64), String> {
@@ -244,7 +244,7 @@ pub(crate) fn function_start_from_xref(
     ))
 }
 
-pub(crate) fn find_init_config_function(slice: &Slice<'_>) -> Result<(u64, u64), String> {
+pub fn find_init_config_function(slice: &Slice<'_>) -> Result<(u64, u64), String> {
     let text = scan_text_words(slice)?;
     for win in text.windows(5) {
         let (pc0, i0) = win[0];
@@ -278,7 +278,7 @@ pub(crate) fn find_init_config_function(slice: &Slice<'_>) -> Result<(u64, u64),
     Err("scene init pattern not found (MOV W8,#1; STR +0x1C0; MOV W9,#1000; STR +0x1C8)".to_string())
 }
 
-pub(crate) fn find_launch_scene_hook_candidates(
+pub fn find_launch_scene_hook_candidates(
     slice: &Slice<'_>,
     init_fn: u64,
     verbose: bool,
@@ -355,7 +355,7 @@ pub(crate) fn find_launch_scene_hook_candidates(
 
 /// Extract version string from __cstring section.
 /// Tries multiple patterns to find a version like "X.Y.Z.NNNNN".
-pub(crate) fn extract_version(slice: &Slice<'_>) -> Option<String> {
+pub fn extract_version(slice: &Slice<'_>) -> Option<String> {
     let cstring = macho::section(slice, "__TEXT", "__cstring")?;
     let buf = macho::section_bytes(slice, cstring)?;
     let hay = String::from_utf8_lossy(buf);

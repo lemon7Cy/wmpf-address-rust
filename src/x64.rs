@@ -2,7 +2,7 @@ use crate::macho::{self, Slice, Xref};
 
 /// Find LEA reg, [rip+disp32] instructions that reference a target VM address.
 /// Returns the VM address of each matching LEA instruction.
-pub(crate) fn find_lea_rip_refs(slice: &Slice<'_>, target: u64) -> Vec<u64> {
+pub fn find_lea_rip_refs(slice: &Slice<'_>, target: u64) -> Vec<u64> {
     let text = match macho::section(slice, "__TEXT", "__text") {
         Some(s) => s,
         None => return Vec::new(),
@@ -41,7 +41,7 @@ pub(crate) fn find_lea_rip_refs(slice: &Slice<'_>, target: u64) -> Vec<u64> {
 
 /// Find all xrefs to a target address in the text section.
 /// Searches for both LEA rip-relative and MOV rip-relative patterns.
-pub(crate) fn find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<Xref>, String> {
+pub fn find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<Xref>, String> {
     let mut refs = find_lea_rip_refs(slice, target);
     refs.sort_unstable();
     refs.dedup();
@@ -54,7 +54,7 @@ pub(crate) fn find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<Xref
 ///   push rbp; sub rsp, N     = 55 48 83 EC xx  or  55 48 81 EC xx xx xx xx
 ///   endbr64; push rbp        = F3 0F 1E FA 55
 ///   sub rsp, N (leaf func)   = 48 83 EC xx  or  48 81 EC xx xx xx xx
-pub(crate) fn is_probable_prologue(buf: &[u8], pos: usize) -> bool {
+pub fn is_probable_prologue(buf: &[u8], pos: usize) -> bool {
     if pos + 4 > buf.len() {
         return false;
     }
@@ -120,7 +120,7 @@ pub(crate) fn is_probable_prologue(buf: &[u8], pos: usize) -> bool {
 
 /// Estimate x86_64 instruction length at `pos`.
 /// This is a simplified decoder - handles the common patterns we need.
-pub(crate) fn x64_insn_len(buf: &[u8], pos: usize) -> usize {
+pub fn x64_insn_len(buf: &[u8], pos: usize) -> usize {
     if pos >= buf.len() {
         return 1;
     }
@@ -238,7 +238,7 @@ fn modrm_len_with_imm32(buf: &[u8], pos: usize) -> usize {
 }
 
 /// Find the function start by scanning backwards for a prologue.
-pub(crate) fn function_start(slice: &Slice<'_>, near: u64) -> Result<u64, String> {
+pub fn function_start(slice: &Slice<'_>, near: u64) -> Result<u64, String> {
     let text = macho::section(slice, "__TEXT", "__text")
         .ok_or("__TEXT,__text not found")?;
     let buf = macho::section_bytes(slice, text)
@@ -267,7 +267,7 @@ pub(crate) fn function_start(slice: &Slice<'_>, near: u64) -> Result<u64, String
 }
 
 /// Find the function end by scanning forwards for the next prologue or RET sled.
-pub(crate) fn function_end(slice: &Slice<'_>, start: u64) -> Result<u64, String> {
+pub fn function_end(slice: &Slice<'_>, start: u64) -> Result<u64, String> {
     let text = macho::section(slice, "__TEXT", "__text")
         .ok_or("__TEXT,__text not found")?;
     let buf = macho::section_bytes(slice, text)
@@ -291,7 +291,7 @@ pub(crate) fn function_end(slice: &Slice<'_>, start: u64) -> Result<u64, String>
 }
 
 /// Find function bounds (start, end) near a given address.
-pub(crate) fn function_bounds(slice: &Slice<'_>, near: u64) -> Result<(u64, u64), String> {
+pub fn function_bounds(slice: &Slice<'_>, near: u64) -> Result<(u64, u64), String> {
     let start = function_start(slice, near)?;
     let end = function_end(slice, start)?;
     Ok((start, end))
@@ -299,7 +299,7 @@ pub(crate) fn function_bounds(slice: &Slice<'_>, near: u64) -> Result<(u64, u64)
 
 /// Find the first CALL rel32 instruction in a range.
 /// Returns (call_addr, call_target).
-pub(crate) fn first_call_in(slice: &Slice<'_>, start: u64, end: u64) -> Option<(u64, u64)> {
+pub fn first_call_in(slice: &Slice<'_>, start: u64, end: u64) -> Option<(u64, u64)> {
     let text = macho::section(slice, "__TEXT", "__text")?;
     let buf = macho::section_bytes(slice, text)?;
     let base = text.addr;
@@ -323,7 +323,7 @@ pub(crate) fn first_call_in(slice: &Slice<'_>, start: u64, end: u64) -> Option<(
 }
 
 /// String → xref → function bounds pipeline (x86_64 version).
-pub(crate) fn function_start_from_xref(
+pub fn function_start_from_xref(
     slice: &Slice<'_>,
     string: &str,
 ) -> Result<(u64, u64, u64), String> {
@@ -349,7 +349,7 @@ pub(crate) fn function_start_from_xref(
 /// Find the scene init config function in x86_64.
 /// Pattern: MOV [reg+0x1C0], 1; MOV [reg+0x1C8], 1000
 /// Returns (function_start, pattern_addr).
-pub(crate) fn find_init_config_function(slice: &Slice<'_>) -> Result<(u64, u64), String> {
+pub fn find_init_config_function(slice: &Slice<'_>) -> Result<(u64, u64), String> {
     let text = macho::section(slice, "__TEXT", "__text")
         .ok_or("__TEXT,__text not found")?;
     let buf = macho::section_bytes(slice, text)
@@ -397,7 +397,7 @@ pub(crate) fn find_init_config_function(slice: &Slice<'_>) -> Result<(u64, u64),
 }
 
 /// Extract version string from __cstring section (same logic as arm64).
-pub(crate) fn extract_version(slice: &Slice<'_>) -> Option<String> {
+pub fn extract_version(slice: &Slice<'_>) -> Option<String> {
     let cstring = macho::section(slice, "__TEXT", "__cstring")?;
     let buf = macho::section_bytes(slice, cstring)?;
     let hay = String::from_utf8_lossy(buf);
@@ -449,7 +449,7 @@ fn find_version_pattern(s: &str) -> Option<String> {
 /// Find scene hook candidates in x86_64.
 /// Looks for callers of the init function, then searches for
 /// instructions that set up a pointer argument before a CALL.
-pub(crate) fn find_launch_scene_hook_candidates(
+pub fn find_launch_scene_hook_candidates(
     slice: &Slice<'_>,
     init_fn: u64,
     verbose: bool,

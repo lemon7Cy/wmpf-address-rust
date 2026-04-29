@@ -3,7 +3,7 @@ use crate::config::{Config, Evidence, StrategyChoice, SCENE_OFFSET, STRUCT_OFFSE
 use crate::macho::{Arch, Slice};
 use crate::x64;
 
-pub(crate) fn analyze(
+pub fn analyze(
     slice: &Slice<'_>,
     arch: Arch,
     version_arg: Option<String>,

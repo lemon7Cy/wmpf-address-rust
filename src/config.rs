@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::macho::Arch;
 
 #[derive(Debug, Clone)]
-pub(crate) struct Evidence {
+pub struct Evidence {
     pub key: String,
     pub value: u64,
     pub confidence: &'static str,
@@ -11,7 +11,7 @@ pub(crate) struct Evidence {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SceneHookCandidate {
+pub struct SceneHookCandidate {
     pub hook: u64,
     pub arg: u32,
     pub strategy: &'static str,
@@ -19,7 +19,7 @@ pub(crate) struct SceneHookCandidate {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Config {
+pub struct Config {
     pub version: String,
     pub load_start: u64,
     pub load_start2: u64,
@@ -34,16 +34,16 @@ pub(crate) struct Config {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StrategyChoice {
+pub enum StrategyChoice {
     Auto,
     LaunchX2,
     PreloadX3,
 }
 
-pub(crate) const SCENE_OFFSET: u32 = 456;
-pub(crate) const STRUCT_OFFSET: u32 = 168;
+pub const SCENE_OFFSET: u32 = 456;
+pub const STRUCT_OFFSET: u32 = 168;
 
-pub(crate) fn json_config(cfg: &Config, arch: Arch) -> String {
+pub fn json_config(cfg: &Config, arch: Arch) -> String {
     let arch_key = match arch {
         Arch::Arm64 => "arm64",
         Arch::X86_64 => "x86_64",
@@ -77,7 +77,7 @@ pub(crate) fn json_config(cfg: &Config, arch: Arch) -> String {
     )
 }
 
-pub(crate) fn report(cfg: &Config, input: &Path, arch: Arch) -> String {
+pub fn report(cfg: &Config, input: &Path, arch: Arch) -> String {
     let arch_str = match arch {
         Arch::Arm64 => "arm64",
         Arch::X86_64 => "x86_64",
