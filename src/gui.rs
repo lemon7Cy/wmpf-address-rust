@@ -363,20 +363,16 @@ impl eframe::App for App {
             ui.add_space(6.0);
 
             // ── 下方区域：左侧扫描结果 + 右侧日志 ──
-            let available_height = ui.available_height();
-            ui.horizontal_top(|ui| {
+            let remaining = ui.available_height();
+            ui.columns(2, |cols| {
                 // 左列：扫描结果
-                let half_width = (ui.available_width() - 8.0) / 2.0;
-                egui::Frame::group(ui.style())
-                    .show(ui, |ui| {
-                        ui.set_width(half_width);
-                        ui.set_min_height(available_height - 16.0);
+                egui::Frame::group(cols[0].style())
+                    .show(&mut cols[0], |ui| {
                         ui.label(egui::RichText::new("扫描结果").strong());
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
-                            .max_height(available_height - 64.0)
+                            .max_height(remaining - 48.0)
                             .show(ui, |ui| {
-                                ui.set_width(half_width - 16.0);
                                 if self.last_config.is_empty() {
                                     ui.label(
                                         egui::RichText::new("等待扫描...").weak().italics(),
@@ -385,19 +381,15 @@ impl eframe::App for App {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut self.last_config.as_str())
                                             .font(egui::TextStyle::Monospace)
-                                            .desired_width(half_width - 24.0),
+                                            .desired_width(ui.available_width()),
                                     );
                                 }
                             });
                     });
 
-                ui.add_space(8.0);
-
                 // 右列：日志
-                egui::Frame::group(ui.style())
-                    .show(ui, |ui| {
-                        ui.set_width(half_width);
-                        ui.set_min_height(available_height - 16.0);
+                egui::Frame::group(cols[1].style())
+                    .show(&mut cols[1], |ui| {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("日志").strong());
                             if ui.small_button("清空").clicked() {
@@ -407,17 +399,22 @@ impl eframe::App for App {
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .stick_to_bottom(true)
-                            .max_height(available_height - 64.0)
+                            .max_height(remaining - 48.0)
                             .show(ui, |ui| {
-                                ui.set_width(half_width - 16.0);
                                 if self.logs.is_empty() {
                                     ui.label(
                                         egui::RichText::new("等待操作...").weak().italics(),
                                     );
                                 } else {
-                                    for log in &self.logs {
-                                        ui.monospace(log);
-                                    }
+                                    // 使用 wrap 确保长日志自动换行
+                                    let log_text = self.logs.join("\n");
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&log_text)
+                                                .monospace(),
+                                        )
+                                        .wrap_mode(egui::TextWrapMode::Wrap),
+                                    );
                                 }
                             });
                     });
