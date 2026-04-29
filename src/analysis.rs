@@ -1,42 +1,69 @@
 use crate::arm64;
 use crate::config::{Config, Evidence, StrategyChoice, SCENE_OFFSET, STRUCT_OFFSET};
-use crate::macho::Slice;
+use crate::macho::{Arch, Slice};
+use crate::x64;
 
 pub(crate) fn analyze(
     slice: &Slice<'_>,
+    arch: Arch,
     version_arg: Option<String>,
     strategy_choice: StrategyChoice,
     verbose: bool,
 ) -> Result<Config, String> {
     let version = version_arg
-        .or_else(|| arm64::extract_version(slice))
+        .or_else(|| match arch {
+            Arch::Arm64 => arm64::extract_version(slice),
+            Arch::X86_64 => x64::extract_version(slice),
+        })
         .unwrap_or_else(|| "unknown".to_string());
     let mut evidence = Vec::new();
 
     // Pipeline 1: CDPFilterHookOffset via SendToClientFilter
-    let (send_func, send_end, send_xref) = arm64::function_start_from_xref(slice, "SendToClientFilter")
-        .map_err(|e| format!("CDPFilterHook detection failed: {e}"))?;
-    let (_bl_at, cdp) =
-        arm64::first_bl_in(slice, send_func, (send_func + 0x80).min(send_end))
-            .ok_or_else(|| {
-                format!(
-                    "CDPFilterHook detection failed: no BL instruction found in function at 0x{send_func:x} (searched 0x{send_func:x}..0x{:x})",
-                    (send_func + 0x80).min(send_end)
-                )
-            })?;
+    let (send_func, send_end, send_xref) = match arch {
+        Arch::Arm64 => arm64::function_start_from_xref(slice, "SendToClientFilter"),
+        Arch::X86_64 => x64::function_start_from_xref(slice, "SendToClientFilter"),
+    }
+    .map_err(|e| format!("CDPFilterHook detection failed: {e}"))?;
+
+    let cdp = match arch {
+        Arch::Arm64 => {
+            let (_bl_at, target) =
+                arm64::first_bl_in(slice, send_func, (send_func + 0x80).min(send_end))
+                    .ok_or_else(|| {
+                        format!(
+                            "CDPFilterHook detection failed: no BL found in function 0x{send_func:x}"
+                        )
+                    })?;
+            target
+        }
+        Arch::X86_64 => {
+            let (_call_at, target) =
+                x64::first_call_in(slice, send_func, (send_func + 0x100).min(send_end))
+                    .ok_or_else(|| {
+                        format!(
+                            "CDPFilterHook detection failed: no CALL found in function 0x{send_func:x}"
+                        )
+                    })?;
+            target
+        }
+    };
+
     evidence.push(Evidence {
         key: "CDPFilterHookOffset".to_string(),
         value: cdp,
         confidence: "high",
         notes: vec![format!(
-            "SendToClientFilter xref at 0x{send_xref:x}; first BL in function 0x{send_func:x} targets 0x{cdp:x}"
+            "SendToClientFilter xref at 0x{send_xref:x}; first call in function 0x{send_func:x} targets 0x{cdp:x}"
         )],
     });
 
     // Pipeline 2: ResourceCachePolicyHookOffset via WAPCAdapterAppIndex.js
-    let (resource, _res_end, res_xref) =
-        arm64::function_start_from_xref(slice, "WAPCAdapterAppIndex.js")
-            .map_err(|e| format!("ResourceCachePolicy detection failed: {e}"))?;
+    let (resource, _res_end, res_xref) = match arch {
+        Arch::Arm64 => arm64::function_start_from_xref(slice, "WAPCAdapterAppIndex.js"),
+        Arch::X86_64 => x64::function_start_from_xref(slice, "WAPCAdapterAppIndex.js"),
+    }
+    .map_err(|e| format!("ResourceCachePolicy detection failed: {e}"))?;
+
     evidence.push(Evidence {
         key: "ResourceCachePolicyHookOffset".to_string(),
         value: resource,
@@ -47,9 +74,12 @@ pub(crate) fn analyze(
     });
 
     // Pipeline 3: LoadStartHookOffset via AppletBringToTop
-    let (load_start, _load_end, load_xref) =
-        arm64::function_start_from_xref(slice, "AppletBringToTop")
-            .map_err(|e| format!("LoadStartHook detection failed: {e}"))?;
+    let (load_start, _load_end, load_xref) = match arch {
+        Arch::Arm64 => arm64::function_start_from_xref(slice, "AppletBringToTop"),
+        Arch::X86_64 => x64::function_start_from_xref(slice, "AppletBringToTop"),
+    }
+    .map_err(|e| format!("LoadStartHook detection failed: {e}"))?;
+
     evidence.push(Evidence {
         key: "LoadStartHookOffset".to_string(),
         value: load_start,
@@ -60,10 +90,18 @@ pub(crate) fn analyze(
     });
 
     // Pipeline 4: LoadStartHookOffset2 via scene init pattern
-    let (init_fn, init_site) = arm64::find_init_config_function(slice)
-        .map_err(|e| format!("LoadStartHook2 detection failed: {e}"))?;
-    let scene_candidates = arm64::find_launch_scene_hook_candidates(slice, init_fn, verbose)
-        .map_err(|e| format!("LoadStartHook2 candidate search failed: {e}"))?;
+    let (init_fn, init_site) = match arch {
+        Arch::Arm64 => arm64::find_init_config_function(slice),
+        Arch::X86_64 => x64::find_init_config_function(slice),
+    }
+    .map_err(|e| format!("LoadStartHook2 detection failed: {e}"))?;
+
+    let scene_candidates = match arch {
+        Arch::Arm64 => arm64::find_launch_scene_hook_candidates(slice, init_fn, verbose),
+        Arch::X86_64 => x64::find_launch_scene_hook_candidates(slice, init_fn, verbose),
+    }
+    .map_err(|e| format!("LoadStartHook2 candidate search failed: {e}"))?;
+
     let selected = match strategy_choice {
         StrategyChoice::Auto => scene_candidates
             .iter()

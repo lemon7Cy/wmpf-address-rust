@@ -2,12 +2,14 @@ mod analysis;
 mod arm64;
 mod config;
 mod macho;
+mod x64;
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 use config::StrategyChoice;
+use macho::Arch;
 
 fn main() {
     if let Err(e) = run() {
@@ -20,9 +22,9 @@ fn run() -> Result<(), String> {
     let args = parse_args()?;
     let data = fs::read(&args.input)
         .map_err(|e| format!("failed to read {}: {e}", args.input.display()))?;
-    let slice = macho::parse_slice(&data)?;
-    let cfg = analysis::analyze(&slice, args.version, args.strategy, args.verbose)?;
-    let json = config::json_config(&cfg);
+    let slice = macho::parse_slice(&data, args.arch)?;
+    let cfg = analysis::analyze(&slice, args.arch, args.version, args.strategy, args.verbose)?;
+    let json = config::json_config(&cfg, args.arch);
     println!("{json}");
 
     if args.print_only {
@@ -40,7 +42,7 @@ fn run() -> Result<(), String> {
         let report_path = docs_dir.join(format!("offsets-{}-auto.md", cfg.version));
         fs::write(&config_path, &json)
             .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
-        fs::write(&report_path, config::report(&cfg, &args.input))
+        fs::write(&report_path, config::report(&cfg, &args.input, args.arch))
             .map_err(|e| format!("failed to write {}: {e}", report_path.display()))?;
         eprintln!("wrote {}", config_path.display());
         eprintln!("wrote {}", report_path.display());
@@ -52,6 +54,7 @@ fn run() -> Result<(), String> {
 #[derive(Debug)]
 struct Args {
     input: PathBuf,
+    arch: Arch,
     version: Option<String>,
     out_dir: Option<PathBuf>,
     strategy: StrategyChoice,
@@ -62,6 +65,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut iter = env::args().skip(1);
     let mut input = None;
+    let mut arch = Arch::Arm64;
     let mut version = None;
     let mut out_dir = None;
     let mut strategy = StrategyChoice::Auto;
@@ -70,10 +74,12 @@ fn parse_args() -> Result<Args, String> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--arch" => {
-                let arch = iter.next().ok_or("--arch requires a value")?;
-                if arch != "arm64" {
-                    return Err("only --arch arm64 is supported in this version".to_string());
-                }
+                let value = iter.next().ok_or("--arch requires a value")?;
+                arch = match value.as_str() {
+                    "arm64" => Arch::Arm64,
+                    "x86_64" | "x64" => Arch::X86_64,
+                    _ => return Err(format!("unsupported arch: {value}\n\n{}", usage())),
+                };
             }
             "--version" => version = Some(iter.next().ok_or("--version requires a value")?),
             "--strategy" => {
@@ -106,6 +112,7 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(Args {
         input: input.ok_or_else(usage)?,
+        arch,
         version,
         out_dir,
         strategy,
@@ -115,5 +122,5 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn usage() -> String {
-    "usage: wmpf-offset-finder <WeChatAppEx Framework> --arch arm64 [--version 19778] [--strategy auto|launch-x2|preload-x3] [--out-dir /path/to/WMPFDebugger-GUI] [--print] [--verbose]".to_string()
+    "usage: wmpf-offset-finder <WeChatAppEx Framework> [--arch arm64|x86_64] [--version 19778] [--strategy auto|launch-x2|preload-x3] [--out-dir /path/to/WMPFDebugger-GUI] [--print] [--verbose]".to_string()
 }

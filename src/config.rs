@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::macho::Arch;
+
 #[derive(Debug, Clone)]
 pub(crate) struct Evidence {
     pub key: String,
@@ -41,12 +43,16 @@ pub(crate) enum StrategyChoice {
 pub(crate) const SCENE_OFFSET: u32 = 456;
 pub(crate) const STRUCT_OFFSET: u32 = 168;
 
-pub(crate) fn json_config(cfg: &Config) -> String {
+pub(crate) fn json_config(cfg: &Config, arch: Arch) -> String {
+    let arch_key = match arch {
+        Arch::Arm64 => "arm64",
+        Arch::X86_64 => "x86_64",
+    };
     format!(
         r#"{{
   "Version": {version},
   "Arch": {{
-    "arm64": {{
+    "{arch_key}": {{
       "LoadStartHookOffset": "0x{load_start:X}",
       "LoadStartHookOffset2": "0x{load_start2:X}",
       "CDPFilterHookOffset": "0x{cdp:X}",
@@ -71,14 +77,18 @@ pub(crate) fn json_config(cfg: &Config) -> String {
     )
 }
 
-pub(crate) fn report(cfg: &Config, input: &Path) -> String {
+pub(crate) fn report(cfg: &Config, input: &Path, arch: Arch) -> String {
+    let arch_str = match arch {
+        Arch::Arm64 => "arm64",
+        Arch::X86_64 => "x86_64",
+    };
     let mut s = String::new();
     s.push_str(&format!("# WMPF Offset Finder Report {}\n\n", cfg.version));
     s.push_str(&format!("- Input: `{}`\n", input.display()));
-    s.push_str("- Arch: `arm64`\n");
+    s.push_str(&format!("- Arch: `{arch_str}`\n"));
     s.push_str(&format!("- Strategy: `{}`\n\n", cfg.strategy));
     s.push_str("## Config\n\n```json\n");
-    s.push_str(&json_config(cfg));
+    s.push_str(&json_config(cfg, arch));
     s.push_str("```\n\n## Evidence\n\n");
     for ev in &cfg.evidence {
         s.push_str(&format!(
@@ -135,7 +145,7 @@ mod tests {
     #[test]
     fn test_json_config_contains_all_fields() {
         let cfg = make_test_config();
-        let json = json_config(&cfg);
+        let json = json_config(&cfg, Arch::Arm64);
         assert!(json.contains("\"Version\": 19778"));
         assert!(json.contains("0x4F58B4C"));
         assert!(json.contains("0x4F65910"));
@@ -149,9 +159,25 @@ mod tests {
     }
 
     #[test]
+    fn test_json_config_arm64_key() {
+        let cfg = make_test_config();
+        let json = json_config(&cfg, Arch::Arm64);
+        assert!(json.contains("\"arm64\""));
+        assert!(!json.contains("\"x86_64\""));
+    }
+
+    #[test]
+    fn test_json_config_x86_64_key() {
+        let cfg = make_test_config();
+        let json = json_config(&cfg, Arch::X86_64);
+        assert!(json.contains("\"x86_64\""));
+        assert!(!json.contains("\"arm64\""));
+    }
+
+    #[test]
     fn test_json_config_is_valid_json() {
         let cfg = make_test_config();
-        let json = json_config(&cfg);
+        let json = json_config(&cfg, Arch::Arm64);
         // Basic structural check - starts with { and ends with }
         let trimmed = json.trim();
         assert!(trimmed.starts_with('{'));
@@ -162,7 +188,7 @@ mod tests {
     fn test_report_contains_sections() {
         let cfg = make_test_config();
         let path = Path::new("/test/WeChatAppEx Framework");
-        let r = report(&cfg, path);
+        let r = report(&cfg, path, Arch::Arm64);
         assert!(r.contains("# WMPF Offset Finder Report 19778"));
         assert!(r.contains("## Config"));
         assert!(r.contains("## Evidence"));
@@ -172,9 +198,17 @@ mod tests {
     }
 
     #[test]
+    fn test_report_arch_field() {
+        let cfg = make_test_config();
+        let path = Path::new("/test/binary");
+        let r = report(&cfg, path, Arch::X86_64);
+        assert!(r.contains("Arch: `x86_64`"));
+    }
+
+    #[test]
     fn test_json_config_hex_formatting() {
         let cfg = make_test_config();
-        let json = json_config(&cfg);
+        let json = json_config(&cfg, Arch::Arm64);
         // Hex values should be uppercase with 0x prefix
         assert!(json.contains("0x4F58B4C"));
         assert!(!json.contains("0x4f58b4c"));

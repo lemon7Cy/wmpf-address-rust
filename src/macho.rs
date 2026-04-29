@@ -2,7 +2,14 @@ const FAT_MAGIC: u32 = 0xCAFEBABE;
 const FAT_MAGIC_64: u32 = 0xCAFEBABF;
 const MH_MAGIC_64: u32 = 0xFEEDFACF;
 const CPU_TYPE_ARM64: u32 = 0x0100_000C;
+const CPU_TYPE_X86_64: u32 = 0x0100_0007;
 const LC_SEGMENT_64: u32 = 0x19;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Arch {
+    Arm64,
+    X86_64,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct Section {
@@ -41,7 +48,11 @@ pub(crate) fn cstr(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).to_string()
 }
 
-pub(crate) fn parse_slice(data: &[u8]) -> Result<Slice<'_>, String> {
+pub(crate) fn parse_slice(data: &[u8], arch: Arch) -> Result<Slice<'_>, String> {
+    let target_cputype = match arch {
+        Arch::Arm64 => CPU_TYPE_ARM64,
+        Arch::X86_64 => CPU_TYPE_X86_64,
+    };
     let magic_be = read_u32_be(data, 0).ok_or("file too small")?;
     if magic_be == FAT_MAGIC || magic_be == FAT_MAGIC_64 {
         let nfat = read_u32_be(data, 4).ok_or("bad fat header")? as usize;
@@ -49,7 +60,7 @@ pub(crate) fn parse_slice(data: &[u8]) -> Result<Slice<'_>, String> {
         for i in 0..nfat {
             let off = 8 + i * arch_size;
             let cputype = read_u32_be(data, off).ok_or(format!("bad fat arch at offset 0x{off:x}"))?;
-            if cputype != CPU_TYPE_ARM64 {
+            if cputype != target_cputype {
                 continue;
             }
             let slice_off = if magic_be == FAT_MAGIC_64 {
@@ -77,25 +88,25 @@ pub(crate) fn parse_slice(data: &[u8]) -> Result<Slice<'_>, String> {
                 .checked_add(slice_size as usize)
                 .ok_or(format!("slice size overflow: offset=0x{slice_off:x}, size=0x{slice_size:x}"))?;
             let slice_data = data.get(start..end).ok_or(format!(
-                "arm64 slice (0x{slice_off:x}..0x{end:x}) outside file (len=0x{:x})",
+                "{arch:?} slice (0x{slice_off:x}..0x{end:x}) outside file (len=0x{:x})",
                 data.len()
             ))?;
-            return parse_macho64(slice_data, slice_off);
+            return parse_macho64(slice_data, slice_off, target_cputype);
         }
-        return Err("arm64 slice not found in universal binary".to_string());
+        return Err(format!("{arch:?} slice not found in universal binary"));
     }
 
-    parse_macho64(data, 0)
+    parse_macho64(data, 0, target_cputype)
 }
 
-pub(crate) fn parse_macho64(data: &[u8], file_offset: u64) -> Result<Slice<'_>, String> {
+pub(crate) fn parse_macho64(data: &[u8], file_offset: u64, expected_cputype: u32) -> Result<Slice<'_>, String> {
     let magic = read_u32_le(data, 0).ok_or("file too small for Mach-O header")?;
     if magic != MH_MAGIC_64 {
         return Err(format!("unsupported Mach-O magic: 0x{magic:08x} (expected 0x{MH_MAGIC_64:08x})"));
     }
     let cputype = read_u32_le(data, 4).ok_or("bad mach header: cputype")?;
-    if cputype != CPU_TYPE_ARM64 {
-        return Err(format!("Mach-O is not arm64, cputype=0x{cputype:x} (expected 0x{CPU_TYPE_ARM64:x})"));
+    if cputype != expected_cputype {
+        return Err(format!("Mach-O cputype mismatch: got 0x{cputype:x}, expected 0x{expected_cputype:x}"));
     }
     let ncmds = read_u32_le(data, 16).ok_or("bad mach header: ncmds")? as usize;
     let mut cursor = 32usize;
