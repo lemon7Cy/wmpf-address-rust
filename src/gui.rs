@@ -184,7 +184,7 @@ impl eframe::App for App {
         // ── 顶部标题栏 ──
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("WMPF Offset Finder");
+                ui.heading("WMPF Address Rust");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
@@ -396,19 +396,23 @@ impl eframe::App for App {
                                 self.logs.clear();
                             }
                         });
+                        // 将日志合并为一个字符串，显示在可滚动的文本框中
+                        let log_text = if self.logs.is_empty() {
+                            "等待操作...".to_string()
+                        } else {
+                            self.logs.join("\n")
+                        };
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .stick_to_bottom(true)
                             .max_height(remaining - 48.0)
                             .show(ui, |ui| {
-                                for log in &self.logs {
-                                    ui.monospace(log);
-                                }
-                                if self.logs.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new("等待操作...").weak().italics(),
-                                    );
-                                }
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut log_text.as_str())
+                                        .font(egui::TextStyle::Monospace)
+                                        .desired_width(ui.available_width())
+                                        .desired_rows(20),
+                                );
                             });
                     });
             });
