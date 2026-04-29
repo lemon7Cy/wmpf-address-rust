@@ -396,23 +396,21 @@ impl eframe::App for App {
                                 self.logs.clear();
                             }
                         });
-                        // 将日志合并为一个字符串，显示在可滚动的文本框中
-                        let log_text = if self.logs.is_empty() {
-                            "等待操作...".to_string()
-                        } else {
-                            self.logs.join("\n")
-                        };
+                        // 使用 ScrollArea + label 方式显示日志
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .stick_to_bottom(true)
                             .max_height(remaining - 48.0)
                             .show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut log_text.as_str())
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(ui.available_width())
-                                        .desired_rows(20),
-                                );
+                                if self.logs.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("等待操作...").weak().italics(),
+                                    );
+                                } else {
+                                    for log in &self.logs {
+                                        ui.monospace(log);
+                                    }
+                                }
                             });
                     });
             });
