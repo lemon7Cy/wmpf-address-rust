@@ -5,6 +5,21 @@ use std::path::PathBuf;
 use wmpf_offset_finder::config::StrategyChoice;
 use wmpf_offset_finder::macho::Arch;
 
+/// Detect file format based on magic bytes
+enum FileFormat {
+    MachO,
+    Pe,
+}
+
+fn detect_format(data: &[u8]) -> FileFormat {
+    // Check for MZ header (PE file)
+    if data.len() >= 2 && data[0] == 0x4D && data[1] == 0x5A {
+        return FileFormat::Pe;
+    }
+    // Default to Mach-O
+    FileFormat::MachO
+}
+
 #[derive(Debug)]
 enum Mode {
     Analyze,
@@ -30,14 +45,35 @@ fn run_analyze(args: Args) -> Result<(), String> {
     let input = args.input.ok_or_else(usage)?;
     let data = fs::read(&input)
         .map_err(|e| format!("failed to read {}: {e}", input.display()))?;
-    let slice = wmpf_offset_finder::macho::parse_slice(&data, args.arch)?;
-    let cfg = wmpf_offset_finder::analysis::analyze(
-        &slice,
-        args.arch,
-        args.version,
-        args.strategy,
-        args.verbose,
-    )?;
+
+    let format = detect_format(&data);
+    let cfg = match format {
+        FileFormat::MachO => {
+            let slice = wmpf_offset_finder::macho::parse_slice(&data, args.arch)?;
+            wmpf_offset_finder::analysis::analyze(
+                &slice,
+                args.arch,
+                args.version,
+                args.strategy,
+                args.verbose,
+            )?
+        }
+        FileFormat::Pe => {
+            let pe = wmpf_offset_finder::pe::parse_pe(&data)?;
+            let arch = match pe.arch {
+                wmpf_offset_finder::pe::Arch::X86_64 => Arch::X86_64,
+                wmpf_offset_finder::pe::Arch::X86 => Arch::X86_64, // Treat x86 as x86_64 for now
+            };
+            wmpf_offset_finder::analysis::analyze_pe(
+                &pe,
+                arch,
+                args.version,
+                args.strategy,
+                args.verbose,
+            )?
+        }
+    };
+
     let json = wmpf_offset_finder::config::json_config(&cfg, args.arch);
     println!("{json}");
 

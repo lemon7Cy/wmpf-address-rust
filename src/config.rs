@@ -48,6 +48,27 @@ pub fn json_config(cfg: &Config, arch: Arch) -> String {
         Arch::Arm64 => "arm64",
         Arch::X86_64 => "x86_64",
     };
+
+    // For Windows (x86_64), use the simplified format with SceneOffsets
+    if arch == Arch::X86_64 {
+        return format!(
+            r#"{{
+  "Version": {version},
+  "LoadStartHookOffset": "0x{load_start:X}",
+  "CDPFilterHookOffset": "0x{cdp:X}",
+  "SceneOffsets": [{struct_offset}, {scene_offset_1}, {scene_offset}]
+}}
+"#,
+            version = cfg.version,
+            load_start = cfg.load_start,
+            cdp = cfg.cdp,
+            struct_offset = cfg.struct_offset,
+            scene_offset_1 = cfg.scene_offset,  // Using scene_offset for second value too
+            scene_offset = cfg.scene_offset
+        );
+    }
+
+    // For macOS (arm64), use the full format
     format!(
         r#"{{
   "Version": {version},
