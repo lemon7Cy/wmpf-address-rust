@@ -1,19 +1,19 @@
 # wmpf-offset-finder
 
-Fast offset finder for `WeChatAppEx Framework` arm64 builds used by `WMPFDebugger-GUI`.
+用于 `WMPFDebugger-GUI` 的 `WeChatAppEx Framework` arm64 构建版本的快速偏移量查找工具。
 
-This tool does not try to replace IDA. It is a narrow scanner for the offsets this project needs:
+本工具并非要替代 IDA，而是一个专用的扫描器，用于查找本项目所需的偏移量：
 
 - `LoadStartHookOffset`
 - `LoadStartHookOffset2`
 - `CDPFilterHookOffset`
 - `ResourceCachePolicyHookOffset`
 
-It reads the Mach-O or universal binary directly, selects the arm64 slice, scans `__TEXT` strings, follows common ARM64 `ADRP/ADD/LDR/BL` patterns, and emits a ready-to-use `addresses.<version>.json`.
+工具直接读取 Mach-O 或通用二进制文件，选择 arm64 切片，扫描 `__TEXT` 段中的字符串，追踪常见的 ARM64 `ADRP/ADD/LDR/BL` 指令模式，然后输出可直接使用的 `addresses.<version>.json` 配置文件。
 
-## Usage
+## 使用方法
 
-Print detected config:
+打印检测到的配置：
 
 ```bash
 cargo run --release -- \
@@ -24,7 +24,7 @@ cargo run --release -- \
   --print
 ```
 
-Write config and report into a `WMPFDebugger-GUI` checkout:
+将配置和报告写入 `WMPFDebugger-GUI` 项目目录：
 
 ```bash
 cargo run --release -- \
@@ -35,31 +35,32 @@ cargo run --release -- \
   --out-dir ../WMPFDebugger-GUI
 ```
 
-Output paths:
+输出路径：
 
 - `frida/config/addresses.<version>.json`
 - `docs/offsets-<version>-auto.md`
 
-## Strategy
-The scanner now supports three modes:
+## 扫描策略
+
+扫描器支持三种模式：
 
 - `--strategy auto`
-  Prefers the validated `LaunchApplet X2` path and falls back to `Preload X3` when needed.
+  优先使用经过验证的 `LaunchApplet X2` 路径，当不可用时回退到 `Preload X3`。
 - `--strategy launch-x2`
-  Forces the newer `19766+` path.
+  强制使用较新的 `19766+` 路径。
 - `--strategy preload-x3`
-  Forces the older preload-style path when present.
+  强制使用旧式的 preload 风格路径（如果存在）。
 
-The main heuristics are:
+主要的启发式规则：
 
-- `SendToClientFilter` xref -> containing devtools function -> first `BL` target for `CDPFilterHookOffset`
-- `WAPCAdapterAppIndex.js` xref -> containing resource whitelist function for `ResourceCachePolicyHookOffset`
-- `AppletBringToTop` xref -> disabled compatibility hook for `LoadStartHookOffset`
-- scene config init pattern `scene = 1000` at `+0x1C8`
-- caller sequence `MOV X2, SP` then `BL` for the new path
-- caller sequence `MOV X3, SP` then `BL` as old-style fallback candidate
+- `SendToClientFilter` 交叉引用 -> 包含 devtools 函数 -> 第一个 `BL` 目标即为 `CDPFilterHookOffset`
+- `WAPCAdapterAppIndex.js` 交叉引用 -> 包含资源白名单函数即为 `ResourceCachePolicyHookOffset`
+- `AppletBringToTop` 交叉引用 -> 禁用的兼容性钩子即为 `LoadStartHookOffset`
+- 场景配置初始化模式 `scene = 1000` 位于 `+0x1C8` 偏移处
+- 调用序列 `MOV X2, SP` 后接 `BL` 为新路径
+- 调用序列 `MOV X3, SP` 后接 `BL` 为旧式回退候选
 
-The emitted mode is:
+输出模式示例：
 
 ```json
 {
@@ -71,8 +72,8 @@ The emitted mode is:
 }
 ```
 
-## Output Notes
+## 输出说明
 
-- Only `arm64` is supported.
-- The generated report includes all detected scene-hook candidates, not only the selected one.
-- Treat output as a candidate config until a runtime test confirms `hook scene@456 ... -> 1101` and `miniapp client connected`.
+- 仅支持 `arm64` 架构。
+- 生成的报告包含所有检测到的场景钩子候选，不仅限于选定的那个。
+- 在运行时测试确认 `hook scene@456 ... -> 1101` 和 `miniapp client connected` 之前，请将输出视为候选配置。
