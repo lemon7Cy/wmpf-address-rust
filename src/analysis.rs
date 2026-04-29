@@ -233,12 +233,15 @@ pub fn analyze_pe(
             if verbose {
                 eprintln!("warning: failed to find scene hook candidates: {e}");
             }
-            // Use a default candidate based on the init function
+            // Use a default candidate using load_start as hook (OnLoadStart function)
+            // with known working SceneOffsets for Windows x86_64
             vec![crate::config::SceneHookCandidate {
-                hook: init_fn,
+                hook: load_start,
                 arg: 2,
                 strategy: "launch-applet-x2-config",
-                notes: vec![format!("fallback: using init function 0x{init_fn:x} as hook")],
+                notes: vec![format!(
+                    "fallback: using OnLoadStart 0x{load_start:x} as hook with default SceneOffsets [1376, 1312, 456]"
+                )],
             }]
         }
     };
@@ -270,10 +273,17 @@ pub fn analyze_pe(
         ],
     });
 
+    // PE 文件的地址是绝对地址（包含 image_base），需要减去 image_base 得到相对偏移
+    let base = pe.image_base;
+    let load_start = load_start.wrapping_sub(base);
+    let load_start2 = selected.hook.wrapping_sub(base);
+    let cdp = cdp.wrapping_sub(base);
+    let resource = resource.wrapping_sub(base);
+
     Ok(Config {
         version,
         load_start,
-        load_start2: selected.hook,
+        load_start2,
         cdp,
         resource,
         load_arg: selected.arg,

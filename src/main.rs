@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+use eframe::egui;
 use wmpf_offset_finder::config::StrategyChoice;
 use wmpf_offset_finder::macho::Arch;
 
@@ -24,6 +25,7 @@ fn detect_format(data: &[u8]) -> FileFormat {
 enum Mode {
     Analyze,
     Serve { binary: Option<PathBuf>, arch: Arch },
+    Gui,
 }
 
 fn main() {
@@ -38,6 +40,7 @@ fn run() -> Result<(), String> {
     match args.mode {
         Mode::Serve { binary, arch } => run_serve(binary, arch),
         Mode::Analyze => run_analyze(args),
+        Mode::Gui => run_gui(),
     }
 }
 
@@ -109,6 +112,21 @@ fn run_serve(binary: Option<PathBuf>, arch: Arch) -> Result<(), String> {
     })
 }
 
+fn run_gui() -> Result<(), String> {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([800.0, 600.0])
+            .with_min_inner_size([600.0, 400.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "WMPF Offset Finder",
+        options,
+        Box::new(|cc| Ok(Box::new(wmpf_offset_finder::gui::App::new(cc)))),
+    )
+    .map_err(|e| format!("GUI 启动失败: {e}"))
+}
+
 #[derive(Debug)]
 struct Args {
     mode: Mode,
@@ -139,6 +157,9 @@ fn parse_args() -> Result<Args, String> {
                     binary: None,
                     arch: Arch::Arm64,
                 };
+            }
+            "gui" => {
+                mode = Mode::Gui;
             }
             "--binary" => {
                 let path = iter.next().ok_or("--binary requires a value")?;
@@ -204,6 +225,7 @@ fn usage() -> String {
     concat!(
         "usage:\n",
         "  wmpf-offset-finder <binary> [--arch arm64|x86_64] [--version N] [--strategy auto|launch-x2|preload-x3] [--out-dir DIR] [--print] [--verbose]\n",
-        "  wmpf-offset-finder serve [--binary <path>] [--arch arm64|x86_64]"
+        "  wmpf-offset-finder serve [--binary <path>] [--arch arm64|x86_64]\n",
+        "  wmpf-offset-finder gui"
     ).to_string()
 }

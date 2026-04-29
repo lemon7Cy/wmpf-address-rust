@@ -43,6 +43,11 @@ pub enum StrategyChoice {
 pub const SCENE_OFFSET: u32 = 456;
 pub const STRUCT_OFFSET: u32 = 168;
 
+// SceneOffsets for x86_64 (Windows) pointer chain in hook.js
+// These are struct field offsets used in hookOnLoadScene():
+//   ptr1.add(56) -> ptr2.add(sceneOffsets[0]) -> ptr3.add(8) -> ptr4.add(sceneOffsets[1]) -> ptr5.add(16) -> miniappScenePtr.add(sceneOffsets[2])
+pub const SCENE_OFFSETS_X64: [u32; 3] = [1376, 1312, 456];
+
 pub fn json_config(cfg: &Config, arch: Arch) -> String {
     let arch_key = match arch {
         Arch::Arm64 => "arm64",
@@ -51,20 +56,21 @@ pub fn json_config(cfg: &Config, arch: Arch) -> String {
 
     // For Windows (x86_64), use the simplified format with SceneOffsets
     if arch == Arch::X86_64 {
+        let so = SCENE_OFFSETS_X64;
         return format!(
             r#"{{
   "Version": {version},
   "LoadStartHookOffset": "0x{load_start:X}",
   "CDPFilterHookOffset": "0x{cdp:X}",
-  "SceneOffsets": [{struct_offset}, {scene_offset_1}, {scene_offset}]
+  "SceneOffsets": [{so0}, {so1}, {so2}]
 }}
 "#,
             version = cfg.version,
             load_start = cfg.load_start,
             cdp = cfg.cdp,
-            struct_offset = cfg.struct_offset,
-            scene_offset_1 = cfg.scene_offset,  // Using scene_offset for second value too
-            scene_offset = cfg.scene_offset
+            so0 = so[0],
+            so1 = so[1],
+            so2 = so[2],
         );
     }
 
@@ -191,8 +197,10 @@ mod tests {
     fn test_json_config_x86_64_key() {
         let cfg = make_test_config();
         let json = json_config(&cfg, Arch::X86_64);
-        assert!(json.contains("\"x86_64\""));
+        // x86_64 uses simplified format without arch key
         assert!(!json.contains("\"arm64\""));
+        assert!(json.contains("\"LoadStartHookOffset\""));
+        assert!(json.contains("\"CDPFilterHookOffset\""));
     }
 
     #[test]
@@ -233,5 +241,15 @@ mod tests {
         // Hex values should be uppercase with 0x prefix
         assert!(json.contains("0x4F58B4C"));
         assert!(!json.contains("0x4f58b4c"));
+    }
+
+    #[test]
+    fn test_json_config_x86_64_scene_offsets() {
+        let cfg = make_test_config();
+        let json = json_config(&cfg, Arch::X86_64);
+        // x86_64 format should use SCENE_OFFSETS_X64 = [1376, 1312, 456]
+        assert!(json.contains("\"SceneOffsets\": [1376, 1312, 456]"));
+        // Should NOT use the old incorrect values
+        assert!(!json.contains("SceneOffsets\": [168"));
     }
 }
