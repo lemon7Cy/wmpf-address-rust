@@ -138,19 +138,8 @@ impl App {
         if let Some(file) = dropped.first() {
             if let Some(path) = &file.path {
                 self.file_path = path.to_string_lossy().to_string();
-                if let Ok(data) = std::fs::read(path) {
-                    match detect_format(&data) {
-                        FileFormat::Pe => {
-                            self.arch = Arch::X86_64;
-                            self.logs
-                                .push(format!("[检测] PE 文件: {}", self.file_path));
-                        }
-                        FileFormat::MachO => {
-                            self.logs
-                                .push(format!("[检测] Mach-O 文件: {}", self.file_path));
-                        }
-                    }
-                }
+                // 只记录路径，不读取文件，避免布局变化
+                self.logs.push(format!("[检测] 文件: {}", self.file_path));
             }
         }
     }
@@ -396,26 +385,22 @@ impl eframe::App for App {
                                 self.logs.clear();
                             }
                         });
+                        // 日志内容
+                        let log_text = if self.logs.is_empty() {
+                            "等待操作...".to_string()
+                        } else {
+                            self.logs.join("\n")
+                        };
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .stick_to_bottom(true)
                             .max_height(remaining - 48.0)
                             .show(ui, |ui| {
-                                if self.logs.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new("等待操作...").weak().italics(),
-                                    );
-                                } else {
-                                    // 使用 wrap 确保长日志自动换行
-                                    let log_text = self.logs.join("\n");
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(&log_text)
-                                                .monospace(),
-                                        )
-                                        .wrap_mode(egui::TextWrapMode::Wrap),
-                                    );
-                                }
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut log_text.as_str())
+                                        .font(egui::TextStyle::Monospace)
+                                        .desired_width(ui.available_width()),
+                                );
                             });
                     });
             });
