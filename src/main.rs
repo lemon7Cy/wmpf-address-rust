@@ -3,8 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use eframe::egui;
-use wmpf_offset_finder::config::StrategyChoice;
-use wmpf_offset_finder::macho::Arch;
+use wmpf_address_rust::config::StrategyChoice;
+use wmpf_address_rust::macho::Arch;
 
 /// Detect file format based on magic bytes
 enum FileFormat {
@@ -52,8 +52,8 @@ fn run_analyze(args: Args) -> Result<(), String> {
     let format = detect_format(&data);
     let cfg = match format {
         FileFormat::MachO => {
-            let slice = wmpf_offset_finder::macho::parse_slice(&data, args.arch)?;
-            wmpf_offset_finder::analysis::analyze(
+            let slice = wmpf_address_rust::macho::parse_slice(&data, args.arch)?;
+            wmpf_address_rust::analysis::analyze(
                 &slice,
                 args.arch,
                 args.version,
@@ -62,12 +62,12 @@ fn run_analyze(args: Args) -> Result<(), String> {
             )?
         }
         FileFormat::Pe => {
-            let pe = wmpf_offset_finder::pe::parse_pe(&data)?;
+            let pe = wmpf_address_rust::pe::parse_pe(&data)?;
             let arch = match pe.arch {
-                wmpf_offset_finder::pe::Arch::X86_64 => Arch::X86_64,
-                wmpf_offset_finder::pe::Arch::X86 => Arch::X86_64, // Treat x86 as x86_64 for now
+                wmpf_address_rust::pe::Arch::X86_64 => Arch::X86_64,
+                wmpf_address_rust::pe::Arch::X86 => Arch::X86_64, // Treat x86 as x86_64 for now
             };
-            wmpf_offset_finder::analysis::analyze_pe(
+            wmpf_address_rust::analysis::analyze_pe(
                 &pe,
                 arch,
                 args.version,
@@ -77,7 +77,7 @@ fn run_analyze(args: Args) -> Result<(), String> {
         }
     };
 
-    let json = wmpf_offset_finder::config::json_config(&cfg, args.arch);
+    let json = wmpf_address_rust::config::json_config(&cfg, args.arch);
     println!("{json}");
 
     if args.print_only {
@@ -95,7 +95,7 @@ fn run_analyze(args: Args) -> Result<(), String> {
         let report_path = docs_dir.join(format!("offsets-{}-auto.md", cfg.version));
         fs::write(&config_path, &json)
             .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
-        fs::write(&report_path, wmpf_offset_finder::config::report(&cfg, &input, args.arch))
+        fs::write(&report_path, wmpf_address_rust::config::report(&cfg, &input, args.arch))
             .map_err(|e| format!("failed to write {}: {e}", report_path.display()))?;
         eprintln!("wrote {}", config_path.display());
         eprintln!("wrote {}", report_path.display());
@@ -108,7 +108,7 @@ fn run_serve(binary: Option<PathBuf>, arch: Arch) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
     rt.block_on(async {
-        wmpf_offset_finder::mcp::run_server(binary, arch).await
+        wmpf_address_rust::mcp::run_server(binary, arch).await
     })
 }
 
@@ -122,7 +122,7 @@ fn run_gui() -> Result<(), String> {
     eframe::run_native(
         "WMPF Offset Finder",
         options,
-        Box::new(|cc| Ok(Box::new(wmpf_offset_finder::gui::App::new(cc)))),
+        Box::new(|cc| Ok(Box::new(wmpf_address_rust::gui::App::new(cc)))),
     )
     .map_err(|e| format!("GUI 启动失败: {e}"))
 }
