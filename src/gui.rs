@@ -363,16 +363,20 @@ impl eframe::App for App {
             ui.add_space(6.0);
 
             // ── 下方区域：左侧扫描结果 + 右侧日志 ──
-            let remaining = ui.available_height();
-            ui.columns(2, |cols| {
+            let available_height = ui.available_height();
+            ui.horizontal_top(|ui| {
                 // 左列：扫描结果
-                egui::Frame::group(cols[0].style())
-                    .show(&mut cols[0], |ui| {
+                let half_width = (ui.available_width() - 8.0) / 2.0;
+                egui::Frame::group(ui.style())
+                    .show(ui, |ui| {
+                        ui.set_width(half_width);
+                        ui.set_min_height(available_height - 16.0);
                         ui.label(egui::RichText::new("扫描结果").strong());
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
-                            .max_height(remaining - 48.0)
+                            .max_height(available_height - 64.0)
                             .show(ui, |ui| {
+                                ui.set_width(half_width - 16.0);
                                 if self.last_config.is_empty() {
                                     ui.label(
                                         egui::RichText::new("等待扫描...").weak().italics(),
@@ -381,27 +385,31 @@ impl eframe::App for App {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut self.last_config.as_str())
                                             .font(egui::TextStyle::Monospace)
-                                            .desired_width(ui.available_width()),
+                                            .desired_width(half_width - 24.0),
                                     );
                                 }
                             });
                     });
 
+                ui.add_space(8.0);
+
                 // 右列：日志
-                egui::Frame::group(cols[1].style())
-                    .show(&mut cols[1], |ui| {
+                egui::Frame::group(ui.style())
+                    .show(ui, |ui| {
+                        ui.set_width(half_width);
+                        ui.set_min_height(available_height - 16.0);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("日志").strong());
                             if ui.small_button("清空").clicked() {
                                 self.logs.clear();
                             }
                         });
-                        // 使用 ScrollArea + label 方式显示日志
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .stick_to_bottom(true)
-                            .max_height(remaining - 48.0)
+                            .max_height(available_height - 64.0)
                             .show(ui, |ui| {
+                                ui.set_width(half_width - 16.0);
                                 if self.logs.is_empty() {
                                     ui.label(
                                         egui::RichText::new("等待操作...").weak().italics(),
