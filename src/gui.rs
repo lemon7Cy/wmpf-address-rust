@@ -3,7 +3,6 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use eframe::egui;
-
 use crate::config::StrategyChoice;
 use crate::macho::Arch;
 
@@ -353,6 +352,7 @@ impl eframe::App for App {
 
             // ── 下方区域：左侧扫描结果 + 右侧日志 ──
             let remaining = ui.available_height();
+            let pane_height = (remaining - 48.0).max(140.0);
             ui.columns(2, |cols| {
                 // 左列：扫描结果
                 egui::Frame::group(cols[0].style())
@@ -360,7 +360,7 @@ impl eframe::App for App {
                         ui.label(egui::RichText::new("扫描结果").strong());
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
-                            .max_height(remaining - 48.0)
+                            .max_height(pane_height)
                             .show(ui, |ui| {
                                 if self.last_config.is_empty() {
                                     ui.label(
@@ -385,21 +385,24 @@ impl eframe::App for App {
                                 self.logs.clear();
                             }
                         });
-                        // 日志内容
-                        let log_text = if self.logs.is_empty() {
-                            "等待操作...".to_string()
-                        } else {
-                            self.logs.join("\n")
-                        };
+                        ui.add_space(6.0);
                         egui::ScrollArea::vertical()
+                            .id_salt("log_scroll")
                             .auto_shrink([false, false])
                             .stick_to_bottom(true)
-                            .max_height(remaining - 48.0)
+                            .max_height(pane_height)
                             .show(ui, |ui| {
+                                let text_color = ui.visuals().text_color();
+                                let log_text = if self.logs.is_empty() {
+                                    "等待操作...".to_string()
+                                } else {
+                                    self.logs.join("\n")
+                                };
                                 ui.add(
-                                    egui::TextEdit::multiline(&mut log_text.as_str())
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(ui.available_width()),
+                                    egui::Label::new(
+                                        egui::RichText::new(log_text).monospace().color(text_color),
+                                    )
+                                    .wrap(),
                                 );
                             });
                     });
