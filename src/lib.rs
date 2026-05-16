@@ -5,4 +5,5 @@ pub mod gui;
 pub mod macho;
 pub mod mcp;
 pub mod pe;
+pub mod scene_chain;
 pub mod x64;

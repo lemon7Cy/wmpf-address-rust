@@ -18,6 +18,21 @@ pub struct SceneHookCandidate {
     pub notes: Vec<String>,
 }
 
+/// Explicit pointer chain used by `hookOnLoadSceneWindowsAdaptive` in
+/// `frida/hook.js`. When this is emitted the Frida side preloads it into
+/// `cachedWindowsScenePath` and bypasses the legacy
+/// `this+56 -> SO0 -> +8 -> SO1 -> +16 -> SO2` template entirely.
+///
+/// The chain is applied as:
+///     let mut p = this;
+///     for off in pointer_offsets { p = *(p + off); }
+///     scene = *(p + scene_offset)  // i32
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScenePath {
+    pub pointer_offsets: Vec<u32>,
+    pub scene_offset: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub version: String,
@@ -31,6 +46,12 @@ pub struct Config {
     pub strategy: &'static str,
     pub scene_candidates: Vec<SceneHookCandidate>,
     pub evidence: Vec<Evidence>,
+    /// Per-binary Windows SceneOffsets (`[SO0, SO1, SO2]`). `None` means the
+    /// fallback constant `SCENE_OFFSETS_X64` is used.
+    pub scene_offsets_x64: Option<[u32; 3]>,
+    /// Full pointer chain derived from the binary. Preferred over
+    /// `scene_offsets_x64` by the Frida side.
+    pub scene_path: Option<ScenePath>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,9 +64,9 @@ pub enum StrategyChoice {
 pub const SCENE_OFFSET: u32 = 456;
 pub const STRUCT_OFFSET: u32 = 168;
 
-// SceneOffsets for x86_64 (Windows) pointer chain in hook.js
-// These are struct field offsets used in hookOnLoadScene():
-//   ptr1.add(56) -> ptr2.add(sceneOffsets[0]) -> ptr3.add(8) -> ptr4.add(sceneOffsets[1]) -> ptr5.add(16) -> miniappScenePtr.add(sceneOffsets[2])
+// Fallback SceneOffsets for Windows x86_64 pointer chain in hook.js.
+// Used when static derivation fails. Accurate for 19339..=19481; 19769+ requires
+// per-binary derivation because the enclosing struct grew.
 pub const SCENE_OFFSETS_X64: [u32; 3] = [1376, 1312, 456];
 
 pub fn json_config(cfg: &Config, arch: Arch) -> String {
@@ -54,24 +75,34 @@ pub fn json_config(cfg: &Config, arch: Arch) -> String {
         Arch::X86_64 => "x86_64",
     };
 
-    // For Windows (x86_64), use the simplified format with SceneOffsets
+    // For Windows (x86_64), use the simplified flat format:
+    // SceneOffsets is a 6-element array representing the full pointer chain:
+    //   [prefix, off1, hop1, off2, hop2, sceneOffset]
+    // hook.js walks: this+[0] -> ptr+[1] -> ptr+[2] -> ptr+[3] -> ptr+[4] -> read_int@+[5]
     if arch == Arch::X86_64 {
-        let so = SCENE_OFFSETS_X64;
-        return format!(
-            r#"{{
-  "Version": {version},
-  "LoadStartHookOffset": "0x{load_start:X}",
-  "CDPFilterHookOffset": "0x{cdp:X}",
-  "SceneOffsets": [{so0}, {so1}, {so2}]
-}}
-"#,
-            version = cfg.version,
-            load_start = cfg.load_start,
-            cdp = cfg.cdp,
-            so0 = so[0],
-            so1 = so[1],
-            so2 = so[2],
-        );
+        let scene_offsets = if let Some(path) = &cfg.scene_path {
+            let mut v: Vec<u32> = path.pointer_offsets.clone();
+            v.push(path.scene_offset);
+            v
+        } else {
+            // Fallback: build from legacy triple [SO0, SO1, SO2] using old template
+            let so = cfg.scene_offsets_x64.unwrap_or(SCENE_OFFSETS_X64);
+            vec![56, so[0], 8, so[1], 16, so[2]]
+        };
+        let offsets_str = scene_offsets
+            .iter()
+            .map(|o| o.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let mut out = String::new();
+        out.push_str("{\n");
+        out.push_str(&format!("  \"Version\": {},\n", cfg.version));
+        out.push_str(&format!("  \"LoadStartHookOffset\": \"0x{:X}\",\n", cfg.load_start));
+        out.push_str(&format!("  \"CDPFilterHookOffset\": \"0x{:X}\",\n", cfg.cdp));
+        out.push_str(&format!("  \"SceneOffsets\": [{}]\n", offsets_str));
+        out.push_str("}\n");
+        return out;
     }
 
     // For macOS (arm64), use the full format
@@ -126,6 +157,18 @@ pub fn report(cfg: &Config, input: &Path, arch: Arch) -> String {
             s.push_str(&format!("  - {}\n", note));
         }
     }
+    if let Some(path) = &cfg.scene_path {
+        s.push_str(&format!(
+            "- `ScenePath` = pointerOffsets={:?} sceneOffset={}\n",
+            path.pointer_offsets, path.scene_offset
+        ));
+    }
+    if let Some(so) = cfg.scene_offsets_x64 {
+        s.push_str(&format!(
+            "- `SceneOffsets` (derived) = [{}, {}, {}]\n",
+            so[0], so[1], so[2]
+        ));
+    }
     s.push_str("\n## Scene Candidates\n\n");
     for candidate in &cfg.scene_candidates {
         s.push_str(&format!(
@@ -166,6 +209,8 @@ mod tests {
                 confidence: "high",
                 notes: vec!["test".to_string()],
             }],
+            scene_offsets_x64: None,
+            scene_path: None,
         }
     }
 
@@ -197,7 +242,6 @@ mod tests {
     fn test_json_config_x86_64_key() {
         let cfg = make_test_config();
         let json = json_config(&cfg, Arch::X86_64);
-        // x86_64 uses simplified format without arch key
         assert!(!json.contains("\"arm64\""));
         assert!(json.contains("\"LoadStartHookOffset\""));
         assert!(json.contains("\"CDPFilterHookOffset\""));
@@ -207,7 +251,6 @@ mod tests {
     fn test_json_config_is_valid_json() {
         let cfg = make_test_config();
         let json = json_config(&cfg, Arch::Arm64);
-        // Basic structural check - starts with { and ends with }
         let trimmed = json.trim();
         assert!(trimmed.starts_with('{'));
         assert!(trimmed.ends_with('}'));
@@ -238,18 +281,31 @@ mod tests {
     fn test_json_config_hex_formatting() {
         let cfg = make_test_config();
         let json = json_config(&cfg, Arch::Arm64);
-        // Hex values should be uppercase with 0x prefix
         assert!(json.contains("0x4F58B4C"));
         assert!(!json.contains("0x4f58b4c"));
     }
 
     #[test]
-    fn test_json_config_x86_64_scene_offsets() {
+    fn test_json_config_x86_64_scene_offsets_fallback() {
+        // When no per-binary ScenePath is derived, fall back to legacy template.
         let cfg = make_test_config();
         let json = json_config(&cfg, Arch::X86_64);
-        // x86_64 format should use SCENE_OFFSETS_X64 = [1376, 1312, 456]
-        assert!(json.contains("\"SceneOffsets\": [1376, 1312, 456]"));
-        // Should NOT use the old incorrect values
-        assert!(!json.contains("SceneOffsets\": [168"));
+        // Fallback uses old template: [56, SO0, 8, SO1, 16, SO2]
+        assert!(json.contains("\"SceneOffsets\": [56, 1376, 8, 1312, 16, 456]"));
+    }
+
+    #[test]
+    fn test_json_config_x86_64_scene_offsets_derived() {
+        let mut cfg = make_test_config();
+        cfg.scene_offsets_x64 = Some([1408, 1344, 456]);
+        cfg.scene_path = Some(ScenePath {
+            pointer_offsets: vec![64, 1408, 8, 1344, 16],
+            scene_offset: 456,
+        });
+        let json = json_config(&cfg, Arch::X86_64);
+        // Flat 6-element array: pointerOffsets + sceneOffset
+        assert!(json.contains("\"SceneOffsets\": [64, 1408, 8, 1344, 16, 456]"));
+        // No ScenePath in new format
+        assert!(!json.contains("\"ScenePath\""));
     }
 }

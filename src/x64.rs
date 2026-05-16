@@ -99,9 +99,14 @@ pub fn is_probable_prologue(buf: &[u8], pos: usize) -> bool {
     }
 
     // sub rsp, imm8 (leaf function, no frame pointer)
+    // Only match as function start if preceded by a boundary marker or push
     if b == 0x48 && pos + 4 <= buf.len() {
         if buf[pos + 1] == 0x83 && buf[pos + 2] == 0xEC && buf[pos + 3] != 0 {
-            return true;
+            let has_boundary = pos == 0
+                || (pos >= 1 && matches!(buf[pos - 1], 0xCC | 0xC3 | 0x90));
+            if has_boundary {
+                return true;
+            }
         }
     }
 
@@ -110,7 +115,42 @@ pub fn is_probable_prologue(buf: &[u8], pos: usize) -> bool {
         if buf[pos + 1] == 0x81 && buf[pos + 2] == 0xEC {
             let imm = u32::from_le_bytes(buf[pos + 3..pos + 7].try_into().unwrap_or([0; 4]));
             if imm > 0 && imm < 0x10000 {
-                return true;
+                let has_boundary = pos == 0
+                    || (pos >= 1 && matches!(buf[pos - 1], 0xCC | 0xC3 | 0x90));
+                if has_boundary {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // MSVC multi-register save prologue:
+    // push r15; push r14; push rsi; push rdi; push rbx; sub rsp, imm
+    // Encoded as: 41 57 / 41 56 / 41 55 / 41 54 / 56 / 57 / 53 / 55 / 48 83 EC / 48 81 EC
+    // Detect: sequence of 2+ push instructions (single-byte 50-57 or REX.B 41 50-57)
+    // followed by sub rsp within 24 bytes, AND preceded by a boundary byte.
+    if (b == 0x41 && pos + 2 <= buf.len() && (0x54..=0x57).contains(&buf[pos + 1]))
+        || ((0x53..=0x57).contains(&b) && b != 0x55)
+    {
+        // Check boundary: must be preceded by CC/C3/90 (or be at section start)
+        let has_boundary = pos == 0
+            || (pos >= 1 && matches!(buf[pos - 1], 0xCC | 0xC3 | 0x90));
+        if has_boundary {
+            // Verify there's a sub rsp within the next 24 bytes
+            let scan_limit = (pos + 24).min(buf.len());
+            let mut k = pos;
+            while k + 4 <= scan_limit {
+                if buf[k] == 0x48
+                    && (k + 4 <= scan_limit && buf[k + 1] == 0x83 && buf[k + 2] == 0xEC)
+                {
+                    return true;
+                }
+                if buf[k] == 0x48
+                    && (k + 7 <= scan_limit && buf[k + 1] == 0x81 && buf[k + 2] == 0xEC)
+                {
+                    return true;
+                }
+                k += 1;
             }
         }
     }

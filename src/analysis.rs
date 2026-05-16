@@ -1,7 +1,8 @@
 use crate::arm64;
-use crate::config::{Config, Evidence, StrategyChoice, SCENE_OFFSET, STRUCT_OFFSET};
+use crate::config::{Config, Evidence, ScenePath, StrategyChoice, SCENE_OFFSET, STRUCT_OFFSET};
 use crate::macho::{Arch, Slice};
 use crate::pe::PeFile;
+use crate::scene_chain;
 use crate::x64;
 
 pub fn analyze(
@@ -142,10 +143,12 @@ pub fn analyze(
         strategy: selected.strategy,
         scene_candidates,
         evidence,
+        scene_offsets_x64: None,
+        scene_path: None,
     })
 }
 
-/// Analyze a PE (Windows DLL) file for WMPF offsets
+/// Analyze a PE (Windows DLL) file for WMPF offsets.
 pub fn analyze_pe(
     pe: &PeFile<'_>,
     _arch: Arch,
@@ -153,8 +156,6 @@ pub fn analyze_pe(
     strategy_choice: StrategyChoice,
     verbose: bool,
 ) -> Result<Config, String> {
-    // For PE files, we need to convert to a Slice-like interface
-    // Create a virtual slice from PE sections
     let slice = pe_to_slice(pe)?;
     let version = version_arg
         .or_else(|| pe_extract_version(pe))
@@ -163,8 +164,9 @@ pub fn analyze_pe(
     let mut evidence = Vec::new();
 
     // Pipeline 1: CDPFilterHookOffset via SendToClientFilter
-    let (send_func, send_end, send_xref) = pe_function_start_from_xref(pe, &slice, "SendToClientFilter")
-        .map_err(|e| format!("CDPFilterHook detection failed: {e}"))?;
+    let (send_func, send_end, send_xref) =
+        pe_function_start_from_xref(pe, &slice, "SendToClientFilter")
+            .map_err(|e| format!("CDPFilterHook detection failed: {e}"))?;
 
     let (_call_at, cdp) = x64::first_call_in(&slice, send_func, (send_func + 0x100).min(send_end))
         .ok_or_else(|| {
@@ -183,8 +185,9 @@ pub fn analyze_pe(
     });
 
     // Pipeline 2: ResourceCachePolicyHookOffset via WAPCAdapterAppIndex.js
-    let (resource, _res_end, res_xref) = pe_function_start_from_xref(pe, &slice, "WAPCAdapterAppIndex.js")
-        .map_err(|e| format!("ResourceCachePolicy detection failed: {e}"))?;
+    let (resource, _res_end, res_xref) =
+        pe_function_start_from_xref(pe, &slice, "WAPCAdapterAppIndex.js")
+            .map_err(|e| format!("ResourceCachePolicy detection failed: {e}"))?;
 
     evidence.push(Evidence {
         key: "ResourceCachePolicyHookOffset".to_string(),
@@ -195,30 +198,59 @@ pub fn analyze_pe(
         )],
     });
 
-    // Pipeline 3: LoadStartHookOffset
-    // On Windows (PE), we look for the xref to "OnLoadStart" string
-    // The offset is the location of the LEA instruction, not the function start
-    // On macOS (Mach-O), we look for AppletBringToTop function start
-    let (load_start, _load_end, load_xref) = if pe.sections.iter().any(|s| s.name == ".text") {
-        // Windows PE file - search for OnLoadStart xref
-        pe_find_onloadstart_xref(pe, &slice)
-            .or_else(|_| pe_function_start_from_xref(pe, &slice, "AppletBringToTop"))
-            .map_err(|e| format!("LoadStartHook detection failed: {e}"))?
-    } else {
-        pe_function_start_from_xref(pe, &slice, "AppletBringToTop")
-            .map_err(|e| format!("LoadStartHook detection failed: {e}"))?
-    };
+    // Pipeline 3: LoadStartHookOffset — we anchor off the pretty-function
+    // literal `virtual void applet::AppletIndexContainer::OnLoadStart`,
+    // falling back to `OnLoadStart` + container ref heuristic, and finally to
+    // `AppletBringToTop` for very old builds.
+    let (load_start, load_end, load_xref) = pe_find_onloadstart_pretty(pe, &slice)
+        .or_else(|_| pe_find_onloadstart_xref(pe, &slice))
+        .or_else(|_| pe_function_start_from_xref(pe, &slice, "AppletBringToTop"))
+        .map_err(|e| format!("LoadStartHook detection failed: {e}"))?;
 
     evidence.push(Evidence {
         key: "LoadStartHookOffset".to_string(),
         value: load_start,
-        confidence: "medium",
+        confidence: "high",
         notes: vec![format!(
-            "OnLoadStart xref at 0x{load_xref:x}; hook point at 0x{load_start:x}"
+            "OnLoadStart anchor xref at 0x{load_xref:x}; function at 0x{load_start:x}"
         )],
     });
 
-    // Pipeline 4: LoadStartHookOffset2 via scene init pattern
+    // Pipeline 4a: static scene pointer chain (ScenePath).
+    // This is the fix that used to be missing: hook.js got a hardcoded
+    // [1376, 1312, 456] triple, so any new layout (like 19769) silently broke.
+    let scene_path_result = scene_chain::derive_scene_chain(&slice, load_start, load_end);
+
+    let (scene_path, scene_offsets_x64) = match &scene_path_result {
+        Ok((path, trace)) => {
+            evidence.push(Evidence {
+                key: "ScenePath".to_string(),
+                value: path.scene_offset as u64,
+                confidence: "high",
+                notes: vec![
+                    format!("pointerOffsets={:?}", path.pointer_offsets),
+                    trace.clone(),
+                ],
+            });
+            let triple = scene_chain::scene_path_to_triple(path);
+            (Some(path.clone()), triple)
+        }
+        Err(err) => {
+            if verbose {
+                eprintln!("warning: scene chain derivation failed: {err}");
+            }
+            evidence.push(Evidence {
+                key: "ScenePath".to_string(),
+                value: 0,
+                confidence: "low",
+                notes: vec![format!("derivation failed: {err}; falling back to SCENE_OFFSETS_X64 constant")],
+            });
+            (None, None)
+        }
+    };
+
+    // Pipeline 4b: LoadStartHookOffset2 via scene init pattern — kept for
+    // parity with macOS output though Windows hook.js doesn't consume it.
     let (init_fn, init_site) = x64::find_init_config_function(&slice)
         .map_err(|e| format!("LoadStartHook2 detection failed: {e}"))?;
 
@@ -226,21 +258,18 @@ pub fn analyze_pe(
         eprintln!("debug: init_fn=0x{init_fn:x}, init_site=0x{init_site:x}");
     }
 
-    // Try to find scene hook candidates, but don't fail if not found
     let scene_candidates = match x64::find_launch_scene_hook_candidates(&slice, init_fn, verbose) {
         Ok(candidates) => candidates,
         Err(e) => {
             if verbose {
                 eprintln!("warning: failed to find scene hook candidates: {e}");
             }
-            // Use a default candidate using load_start as hook (OnLoadStart function)
-            // with known working SceneOffsets for Windows x86_64
             vec![crate::config::SceneHookCandidate {
                 hook: load_start,
                 arg: 2,
                 strategy: "launch-applet-x2-config",
                 notes: vec![format!(
-                    "fallback: using OnLoadStart 0x{load_start:x} as hook with default SceneOffsets [1376, 1312, 456]"
+                    "fallback: using OnLoadStart 0x{load_start:x} as hook"
                 )],
             }]
         }
@@ -273,7 +302,7 @@ pub fn analyze_pe(
         ],
     });
 
-    // PE 文件的地址是绝对地址（包含 image_base），需要减去 image_base 得到相对偏移
+    // PE addresses are absolute (include image_base); subtract to get RVAs.
     let base = pe.image_base;
     let load_start = load_start.wrapping_sub(base);
     let load_start2 = selected.hook.wrapping_sub(base);
@@ -292,12 +321,13 @@ pub fn analyze_pe(
         strategy: selected.strategy,
         scene_candidates,
         evidence,
+        scene_offsets_x64,
+        scene_path,
     })
 }
 
-/// PE-specific version extraction
+/// PE-specific version extraction.
 fn pe_extract_version(pe: &PeFile<'_>) -> Option<String> {
-    // Search for version pattern in .rdata section
     for sec in &pe.sections {
         if sec.name == ".rdata" || sec.name == ".rodata" || sec.name == "_RDATA" {
             if let Some(buf) = crate::pe::section_bytes(pe, sec) {
@@ -350,7 +380,7 @@ fn find_version_pattern_pe(s: &str) -> Option<String> {
     None
 }
 
-/// PE-specific string -> xref -> function bounds pipeline
+/// PE-specific string -> xref -> function bounds pipeline.
 fn pe_function_start_from_xref(
     pe: &PeFile<'_>,
     slice: &Slice<'_>,
@@ -363,7 +393,6 @@ fn pe_function_start_from_xref(
 
     let mut failures = Vec::new();
     for str_addr in addrs {
-        // Find xrefs to this string in the .text section
         let xrefs = pe_find_text_xrefs(slice, str_addr)?;
         if let Some(xref) = xrefs.first() {
             let (start, end) = x64::function_bounds(slice, xref.at)?;
@@ -377,23 +406,43 @@ fn pe_function_start_from_xref(
     ))
 }
 
-/// Find the LoadStartHookOffset for Windows PE files
-/// This is the function start that contains an xref to "OnLoadStart" string
-/// and also references "applet_index_container.cc"
+/// Primary OnLoadStart locator: anchor on the `__PRETTY_FUNCTION__` literal.
+/// This string is unique and has exactly one LEA xref — the one inside the
+/// real OnLoadStart function.
+fn pe_find_onloadstart_pretty(
+    pe: &PeFile<'_>,
+    slice: &Slice<'_>,
+) -> Result<(u64, u64, u64), String> {
+    let anchor = "virtual void applet::AppletIndexContainer::OnLoadStart";
+    let addrs = crate::pe::find_string(pe, anchor);
+    if addrs.is_empty() {
+        return Err(format!("string not found: \"{anchor}\""));
+    }
+    for str_addr in addrs {
+        let xrefs = pe_find_text_xrefs(slice, str_addr)?;
+        if let Some(xref) = xrefs.first() {
+            let (start, end) = x64::function_bounds(slice, xref.at)?;
+            return Ok((start, end, xref.at));
+        }
+    }
+    Err(format!("no xref into \"{anchor}\""))
+}
+
+/// Secondary OnLoadStart locator: search for the bare `OnLoadStart` string
+/// and pick the candidate function that also references
+/// `applet_index_container`. Keeps working on older builds where the pretty
+/// function string isn't present.
 fn pe_find_onloadstart_xref(
     pe: &PeFile<'_>,
     slice: &Slice<'_>,
 ) -> Result<(u64, u64, u64), String> {
-    // Find OnLoadStart string
     let onload_addrs = crate::pe::find_string(pe, "OnLoadStart");
     if onload_addrs.is_empty() {
         return Err("OnLoadStart string not found".to_string());
     }
 
-    // Find applet_index_container string for verification
     let container_addrs = crate::pe::find_string(pe, "applet_index_container");
 
-    // Collect all candidate functions
     let mut candidates = Vec::new();
 
     for str_addr in &onload_addrs {
@@ -410,7 +459,6 @@ fn pe_find_onloadstart_xref(
 
             let offset_in_fn = xref.at - fn_start;
 
-            // Check if this function also references applet_index_container
             let has_container_ref = if !container_addrs.is_empty() {
                 container_addrs.iter().any(|caddr| {
                     let container_xrefs = pe_find_text_xrefs(slice, *caddr);
@@ -427,34 +475,26 @@ fn pe_find_onloadstart_xref(
         }
     }
 
-    // Sort candidates: prefer those with container ref, then by reasonable offset
     candidates.sort_by(|a, b| {
-        // First: prefer functions that reference applet_index_container
         if a.4 != b.4 {
             return b.4.cmp(&a.4);
         }
-        // Second: prefer offsets in reasonable range (0x50 - 0x200)
         let a_in_range = a.3 >= 0x50 && a.3 <= 0x200;
         let b_in_range = b.3 >= 0x50 && b.3 <= 0x200;
         if a_in_range != b_in_range {
             return b_in_range.cmp(&a_in_range);
         }
-        // Third: prefer larger functions (more likely to be the right one)
         (b.1 - b.0).cmp(&(a.1 - a.0))
     });
 
-    if let Some((fn_start, fn_end, xref_at, _, has_container)) = candidates.first() {
-        if *has_container {
-            eprintln!("debug: found OnLoadStart xref in function with applet_index_container ref");
-        }
-        // Return the function start, not the xref location
+    if let Some((fn_start, fn_end, xref_at, _, _)) = candidates.first() {
         return Ok((*fn_start, *fn_end, *xref_at));
     }
 
     Err("LoadStartHookOffset not found: no valid OnLoadStart xref found".to_string())
 }
 
-/// Find xrefs to a target address in the .text section of a PE file
+/// Find xrefs to a target address in the .text section of a PE file.
 fn pe_find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<crate::macho::Xref>, String> {
     // After pe_to_slice, .text is mapped to __TEXT,__text
     let text = crate::macho::section(slice, "__TEXT", "__text")
@@ -469,11 +509,9 @@ fn pe_find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<crate::macho
     let mut i = 0;
     while i + 7 <= buf.len() {
         let b0 = buf[i];
-        // Check for REX.W prefix (0x48) or REX.WB (0x4C)
         if b0 == 0x48 || b0 == 0x4C {
             if i + 7 <= buf.len() && buf[i + 1] == 0x8D {
                 let modrm = buf[i + 2];
-                // mod=00, r/m=101 => RIP-relative
                 if (modrm & 0xC7) == 0x05 {
                     let disp = i32::from_le_bytes(
                         buf[i + 3..i + 7].try_into().unwrap(),
@@ -491,18 +529,14 @@ fn pe_find_text_xrefs(slice: &Slice<'_>, target: u64) -> Result<Vec<crate::macho
     Ok(refs)
 }
 
-/// Convert a PE file to a Slice-like structure for analysis
-/// This creates a virtual mapping that the existing x64 analysis can use
+/// Convert a PE file to a Slice-like structure for analysis.
 fn pe_to_slice<'a>(pe: &'a PeFile<'a>) -> Result<Slice<'a>, String> {
     use crate::macho::Section;
 
     let mut sections = Vec::new();
 
     for sec in &pe.sections {
-        // Map PE sections to the Slice format
-        // The key sections we care about are .text (code) and .rdata (read-only data)
         if sec.raw_data_size > 0 {
-            // Map PE section names to Mach-O style names for compatibility
             let (seg, name) = match sec.name.as_str() {
                 ".text" => ("__TEXT".to_string(), "__text".to_string()),
                 ".rdata" => ("__TEXT".to_string(), "__cstring".to_string()),
